@@ -6,6 +6,7 @@
       USE DAY2
       USE DAY3
       USE DAY4
+      USE DAY6
 
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       
@@ -43,13 +44,15 @@
       READ(*,*) T,P
       WRITE(*,*)
       
-      CALL RUN_DAY1(NCA, T, P, Z, COMPS)
+C      CALL RUN_DAY1(NCA, T, P, Z, COMPS)
       
-      CALL RUN_DAY2(NCA, T, P, Z, COMPS)
+C      CALL RUN_DAY2(NCA, T, P, Z, COMPS)
       
-      CALL RUN_DAY3(NCA, T, P, Z, COMPS)
+C      CALL RUN_DAY3(NCA, T, P, Z, COMPS)
       
-      CALL RUN_DAY4(NCA, T, P, Z)      
+C      CALL RUN_DAY4(NCA, T, P, Z) 
+      
+      CALL RUN_DAY6(NCA, T, P, Z, COMPS)
       
       GOTO 100
       

@@ -33,6 +33,7 @@
 		<File RelativePath=".\DAY3.for"/>
 		<File RelativePath=".\DAY4.for"/>
 		<File RelativePath=".\DAY5.for"/>
+		<File RelativePath=".\DAY6.for"/>
 		<File RelativePath=".\PRINTFUNC.for"/>
 		<File RelativePath=".\TESTS.for">
 			<FileConfiguration Name="Debug|Win32" ExcludedFromBuild="true"/></File>
