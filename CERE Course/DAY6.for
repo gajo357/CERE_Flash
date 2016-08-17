@@ -54,16 +54,16 @@ C     VAR   VARIABLE TO GO BY
       DOUBLE PRECISION FUGP(NCA), FUGPL(NCA), FUGPV(NCA)
       DOUBLE PRECISION FUGX(NCA, NCA), FUGXL(NCA, NCA), FUGXV(NCA, NCA)
       DOUBLE PRECISION JACOB(NCA + 2, NCA + 2), F(NCA + 2)
-      DOUBLE PRECISION X(NCA + 2), DX(NCA + 2)
-      DOUBLE PRECISION MAXERROR
-      
+      DOUBLE PRECISION DX, X(NCA + 2), X_1(NCA + 2)
+      CHARACTER CHOICE
+                 
 C     NUMBER OF ITERATIONS FOR SAT T ALGORITHM
       MAXITER = 3
-      MAXERROR = 1E-6
       IER = 0
       
       SPEC = 0
-            
+
+C     NORMALIZE THE FEED COMPOSITION
       DO I=1,NCA
           ZNORM(I) = Z(I) / SUM(Z)
       ENDDO  
@@ -73,22 +73,88 @@ C     SMALL INITIAL PRESSURE AND START FROM THE BUBBLE POINT LINE
       BETA = 0
       CALL GETSATTEMP(NCA, P, ZNORM, BETA, T, L, V, 
      &                IER, MAXITER = MAXITER)
-      IPOINT = 1
-      PHAT(IPOINT) = T
-      PHAP(IPOINT) = P
+C     SET X FACTOR
       DO I = 1,NCA
-          KFACT(I) = V(I)/L(I)
-          X(I) = LOG(KFACT(I))
+          X(I) = LOG(V(I)/L(I))
       ENDDO
       X(NCA + 1) = LOG(T)
       X(NCA + 2) = LOG(P)
-      DX(:) = 0
+      X_1(:) = 0
+      VAR = 9
       
-      WRITE(*,*)
-      WRITE(*,'(A, I4)') "CHOOSE VARIABLE TO GO BY FROM 1 TO ", NCA + 2
-      READ(*,*) VAR      
+      IPOINT = 1
+      DO WHILE (.TRUE.)
+          
+          IF (IPOINT .EQ. 1)  GOTO 100
+          
+300       WRITE(*,*)
+          WRITE(*,*) "CONTINUE Y/N"
+          READ (*,*) CHOICE
+          IF(CHOICE .EQ. 'N') GOTO 101
+          WRITE(*,*)
+          WRITE(*,'(A, I4)') 
+     &      "CHOOSE VARIABLE TO GO BY FROM 1 TO ", NCA + 2
+          READ(*,*) VAR
+          WRITE(*,*) "CHOOSE VARIABLE INCREASE"
+          READ(*,*) DX
+          
+          X(VAR) = X(VAR) + DX
+      
+100       CALL RUNNEWTON(NCA, ZNORM, BETA, VAR, X, IER)
+          IF(IER .GT. 0) THEN
+              WRITE(*,*) "THE CALCULATION DID NOT CONVERGE"
+              X(:) = X_1(:)
+              GOTO 300
+          ENDIF
+          
+200       CONTINUE
+          PHAT(IPOINT) = EXP(X(NCA + 1))
+          PHAP(IPOINT) = EXP(X(NCA + 2))
+          IPOINT = IPOINT + 1
+          X_1(:) = X(:)
+          
+1000      FORMAT(A10, F30.20)
+          WRITE(*,*) "STEP SOLUTION"
+          DO I=1,NCA
+              WRITE(*,"(A, I2, F30.20)") "lnK", I, X(I)
+          ENDDO
+          WRITE(*,1000) "lnT", X(NCA + 1)
+          WRITE(*,1000) "lnP", X(NCA + 2)
+          WRITE(*,1000) "T", PHAT(IPOINT - 1)
+          WRITE(*,1000) "P", PHAP(IPOINT - 1)
+      ENDDO
+      
+101   CONTINUE
+      END SUBROUTINE
+      
+      SUBROUTINE RUNNEWTON(NCA, Z, BETA, VAR, X, IER)
+      IMPLICIT DOUBLE PRECISION (A-H, O,Z)
+C     VAR   VARIABLE TO GO BY
+      INTEGER NCA, VAR, IER
+      DOUBLE PRECISION Z(NCA)
+      
+      INTEGER IPOINT, INDX(NCA + 2)
+      DOUBLE PRECISION BETA, SPEC
+      DOUBLE PRECISION KFACT(NCA)
+      DOUBLE PRECISION L(NCA), V(NCA)
+      DOUBLE PRECISION FUG(NCA), FUGL(NCA), FUGV(NCA)
+      DOUBLE PRECISION FUGT(NCA), FUGTL(NCA), FUGTV(NCA)
+      DOUBLE PRECISION FUGP(NCA), FUGPL(NCA), FUGPV(NCA)
+      DOUBLE PRECISION FUGX(NCA, NCA), FUGXL(NCA, NCA), FUGXV(NCA, NCA)
+      DOUBLE PRECISION JACOB(NCA + 2, NCA + 2), F(NCA + 2)
+      DOUBLE PRECISION X(NCA + 2), DX(NCA + 2)
+      DOUBLE PRECISION MAXERROR
+      
+      MAXERROR = 1E-6
+      
+      IER = 0
                         
-      DO WHILE (.TRUE.)          
+      DO WHILE (.TRUE.)
+C         GET NEW VAPOR LIQUID COMPOSITION
+          DO I = 1,NCA
+              KFACT(I) = EXP(X(I))
+          ENDDO
+          CALL GETCOMPOSITION(NCA, Z, BETA, KFACT, L, V)     
           
 C         CHECK FUGACITY CEFFICIENTS
           CALL THERMO(EXP(X(NCA + 1)), EXP(X(NCA + 2)), L, FUGL,
@@ -99,6 +165,7 @@ C         CHECK FUGACITY CEFFICIENTS
           
 C         CALCULATE JACOBIAN
           DO I = 1,NCA+2
+C             CALCULATE FUNCTION F
               IF(I .LE. NCA) THEN
                   F(I) = X(I) + FUGV(I) - FUGL(I)
               ELSE IF(I .EQ. NCA + 1) THEN
@@ -119,8 +186,8 @@ C                 DF(I)/DlnK(J)   I,J = 1...NCA
                       TEMP = 0
                       IF (I .EQ. J) TEMP = 1.0
                       JACOB(I,J) = TEMP + 
-     &                    FUGXV(I, J)*(1 - BETA)*L(J)*V(J)/ZNORM(J) +
-     &                    FUGXL(I, J)*BETA*L(J)*V(J)/ZNORM(J)
+     &                    FUGXV(I, J)*(1 - BETA)*L(J)*V(J)/Z(J) +
+     &                    FUGXL(I, J)*BETA*L(J)*V(J)/Z(J)
 C                 Df(I)/DlnP      I=1...NCA
                   ELSE IF (I .LE. NCA .AND. J .EQ. NCA + 2) THEN
                       JACOB(I,J) = (FUGPV(I) - FUGPL(I)) * EXP(X(J)) 
@@ -129,7 +196,7 @@ C                 Df(I)/DlnT      I=1...NCA
                       JACOB(I,J) = (FUGTV(I) - FUGTL(I)) * EXP(X(J)) 
 C                 Df(NCA+1)/DlnK(J)
                   ELSE IF (I .EQ. NCA + 1 .AND. J .LE. NCA) THEN
-                      JACOB(I,J) = L(J)*V(J)/ZNORM(J)
+                      JACOB(I,J) = L(J)*V(J)/Z(J)
 C                 Df(NCA+1)/DlnP    Df(NCA + 1)/DlnT          
                   ELSE IF (I .EQ. NCA + 1 .AND. J .GT. NCA) THEN
                       JACOB(I,J) = 0
@@ -153,8 +220,13 @@ C         CALCULATE NEW X
                   GOTO 101
               END IF
               
-              X(I) = X(I) - DX(I)
+              X(I) = X(I) - DX(I)              
           ENDDO
+          IF(EXP(X(NCA + 1)) .LT. 0 .OR.
+     &       EXP(X(NCA + 2)) .LE. 0) THEN
+              IER = 601
+              GOTO 101
+          ENDIF          
           
 C         CHECK IF CONVERGED
           DO I = 1,NCA + 2
@@ -163,11 +235,6 @@ C         CHECK IF CONVERGED
           GOTO 200
           
 100       CONTINUE
-C         GET NEW VAPOR LIQUID COMPOSITION
-          DO I = 1,NCA
-              KFACT(I) = EXP(X(I))
-          ENDDO
-          CALL GETCOMPOSITION(NCA, ZNORM, BETA, KFACT, L, V)
       ENDDO
       
 200   CONTINUE
