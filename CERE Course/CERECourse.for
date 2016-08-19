@@ -11,8 +11,8 @@
 
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       
-      PARAMETER (NCA=7)
-C      PARAMETER (NCA=5)
+C      PARAMETER (NCA=7)
+      PARAMETER (NCA=5)
 C      PARAMETER (NCA=3)
       
       INTEGER ICEQ
@@ -27,8 +27,8 @@ C      PARAMETER (NCA=3)
       
       ICEQ =  0
       
-      LIST(:NCA) = (/1,2,3,5,7,8,13/)
-C      LIST(:NCA) = (/1,2,3,14,15/)
+C      LIST(:NCA) = (/1,2,3,5,7,8,13/)
+      LIST(:NCA) = (/1,2,3,14,15/)
 C      LIST(:NCA) = (/1,14,15/)
                        
       CALL INDATA(NCA,ICEQ,LIST)
@@ -37,8 +37,8 @@ C      LIST(:NCA) = (/1,14,15/)
           CALL GETNAME(I, COMPS(I))
       END DO
       
-      Z(:NCA) = (/94.30,2.70,0.74,0.49,0.27,0.10,1.40/)
-C      Z(:NCA) = (/0.66, 0.03, 0.01, 0.05, 0.25/)
+C      Z(:NCA) = (/94.30,2.70,0.74,0.49,0.27,0.10,1.40/)
+      Z(:NCA) = (/0.66, 0.03, 0.01, 0.05, 0.25/)
 C      Z(:NCA) = (/0.5, 0.1, 0.4/)
       
 100   CONTINUE
@@ -59,9 +59,9 @@ C      CALL RUN_DAY3(NCA, T, P, Z, COMPS)
       
 C      CALL RUN_DAY4(NCA, T, P, Z) 
       
-      CALL RUN_DAY6(NCA, T, P, Z, COMPS)
+C      CALL RUN_DAY6(NCA, T, P, Z, COMPS)
       
-C      CALL RUN_DAY7(NCA, T, P, Z, LIST, COMPS)      
+      CALL RUN_DAY7(NCA, T, P, Z, LIST, COMPS)      
       
       GOTO 100
       

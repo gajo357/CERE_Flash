@@ -38,11 +38,17 @@ C     LIST    LIST OF COMPONENT INDEXES
       DOUBLE PRECISION Z(NCA)
       CHARACTER*4 COMPS(NCA)
       
-      DOUBLE PRECISION BETA(NF), BETA0(NF)
+      DOUBLE PRECISION BETA(NF), BETA0(NF), BETANEW(NF)
       DOUBLE PRECISION FUGFAC(NCA, NF), Y(NCA, NF), FUG(NCA)
       DOUBLE PRECISION KFACT(NCA), FUGFACNEW(NCA, NF), EFUG(NF), EMARGIN
+      DOUBLE PRECISION FUGFAC_1(NCA, NF), FUGFAC_2(NCA, NF)
+      DOUBLE PRECISION LAMBDA, L1, L2, D(NCA), D1(NCA)
+      DOUBLE PRECISION DMARGIN, G1, G2, DG
+      INTEGER ITER, CHECKSTEP
       
       EMARGIN = 1E-7
+      DMARGIN = 1E-7
+      CHECKSTEP = 5
       
 C     INITIAL ESTIMATES
       CALL WILSON_KFACT(NCA, P, T, KFACT)
@@ -68,16 +74,27 @@ C                 METHANE IN H2S RICH LIQUID PHASE
           BETA(K) = 1.0/NF
       ENDDO
       
-      NITER = 1
+      NITER = 1      
       DO WHILE (.TRUE.)
-          CALL MULTRACF(NCA, NF, Z, BETA, FUGFAC, Y, IER)
+C         ACCURACY SHOULD BE GREATER AFTER EACH ACCELARATION AND THE FIRST STEP
+          IF (MOD(NITER, CHECKSTEP) .EQ. 1) THEN
+              DMARGIN = 1E-10
+          ELSE
+              DMARGIN = 1E-5
+          ENDIF
+          
+C         CALL RR ALGORITHM
+          CALL MULTRACF(NCA, NF, Z, BETA, FUGFAC, DMARGIN, Y, IER)
+C         SAVE INITIAL BETA VALUES FOR PRINTING
           IF(NITER .EQ. 1) BETA0(:) = BETA(:)
           
+C         RECALCULATE FUGACITIES BASED ON CALCULATED COMPOSITIONS
           DO K = 1,NF
               CALL THERMO(T, P, Y(:,K), FUG)
               FUGFACNEW(:,K) = EXP(FUG(:))
           ENDDO
           
+C         CHECK FOR CONVERGENCE
           DO I = 1,NCA              
               DO K = 1,NF
                   ETEMP = ABS(
@@ -92,7 +109,65 @@ C                 METHANE IN H2S RICH LIQUID PHASE
           ENDDO
           GOTO 200
           
-100       FUGFAC(:,:) = FUGFACNEW(:,:)
+C         PREPARE THE NEXT STEP
+100       FUGFAC_2(:,:) = FUGFAC_1(:,:)
+          FUGFAC_1(:,:) = FUGFAC(:,:)
+          FUGFAC(:,:) = FUGFACNEW(:,:)
+C         ACCELARATE THE CALCULATION
+          IF (MOD(NITER, CHECKSTEP) .EQ. 0) THEN
+              DO K = 1,NF
+                  L1 = 0
+                  L2 = 0
+                  DO I = 1,NCA
+                      D(I) = LOG(FUGFAC_1(I, K)) - LOG(FUGFAC_2(I, K))
+                      D1(I) = LOG(FUGFAC(I, K)) - LOG(FUGFAC_1(I, K))
+                      
+                      L1 = L1 + D1(I)**2
+                      L2 = L2 + D(I) * D1(I)
+                  ENDDO
+                  LAMBDA = L1 / L2
+                  
+C                 USE THERMCALC CORRECTED K FACTORS              
+                  DO I = 1,NCA
+                      FUGFACNEW(I, K) = EXP (LOG(FUGFAC(I, K)) + 
+     &                           (D1(I) * LAMBDA) / (1 - LAMBDA))
+                  ENDDO
+              ENDDO
+C             CHECK NEW FUGACITY FACTORS IF THEY DECREASE THE GIBBS ENERGY
+C             GIBBS ENERGY BEFORE ACCELARATION
+              G1 = 0
+              DO I = 1,NCA
+                  DO K = 1,NF
+                      G1 = G1 + Y(I, K) * 
+     &                    (LOG(Y(I, K)) + LOG(FUGFAC(I, K)))
+                  ENDDO
+              ENDDO
+              
+C             GIBBS ENERGY AFTER ACCELARATION
+              BETANEW(:) = BETA(:)
+              CALL MULTRACF(NCA, NF, Z, BETANEW, FUGFACNEW,
+     &                        DMARGIN, Y, IER)
+              G2 = 0
+              DO K = 1,NF
+                  CALL THERMO(T, P, Y(:,K), FUG)
+                  DO I = 1,NCA
+                      G2 = G2 + Y(I, K) * 
+     &                    (LOG(Y(I, K)) + FUG(I))
+                  ENDDO
+                  
+                  FUGFACNEW(:,K) = EXP(FUG(:))
+              ENDDO
+              
+C             CALCULATE THE DELTA GIBBS
+              DG = G2 - G1
+C             IF DELTA GIBBS IS NEGATIVE, WE ACCEPT ACCELARATION
+              IF (DG .LT. 0) THEN
+                  FUGFAC(:,:) = FUGFACNEW(:,:)
+              ELSE
+                  DG = 0
+              ENDIF              
+          ENDIF
+                    
           NITER = NITER + 1
       ENDDO
 
@@ -105,7 +180,7 @@ C                 METHANE IN H2S RICH LIQUID PHASE
 101   CONTINUE
       END SUBROUTINE
 
-      SUBROUTINE MULTRACF(NCA,NF,Z,BETA,FUGFAC, Y, IER)
+      SUBROUTINE MULTRACF(NCA,NF,Z,BETA,FUGFAC, DMARGIN, Y, IER)
       IMPLICIT DOUBLE PRECISION (A-H, O-Z)
 C     NC: NO. OF COMPONENTS
 C     NF: NO. OF PHASES
@@ -117,7 +192,7 @@ C     FUGFAC: INVERSE FUGACITY COEFFICIENT ARRAY
       DOUBLE PRECISION Q, G(NF), H(NF, NF)
       DOUBLE PRECISION E(NCA), QNEW
       DOUBLE PRECISION ALPHA, ALPHANEW, BETANEW(NF), DBETA(NF)
-      DOUBLE PRECISION QMARGIN
+      DOUBLE PRECISION QMARGIN, DMARGIN
       INTEGER INDX(NF), KZERO
       LOGICAL PHAACT(NF)
       
@@ -173,16 +248,17 @@ C         STEP NOT EXCEPTED, HALF THE STEP, RECALCULATE
       
 C     FOUND VALID ALPHA
 C     STEP 5: CALCULATE NEW Q
-500   CALL CALCQ(NCA, NF, Z, BETANEW, FUGFAC, PHAACT, E, QNEW)
+500   IF (ALPHA .LT. QMARGIN) GOTO 700
+      CALL CALCQ(NCA, NF, Z, BETANEW, FUGFAC, PHAACT, E, QNEW)
       
 C     STEP 6: CHECK NEW Q
       IF (QNEW .LT. Q + QMARGIN) THEN
 C         STEP IS ACCEPTED
           Q = QNEW
           BETA(:) = BETANEW(:)
-C         CHECK THE CONVERGENCE
+C         CHECK THE CONVERGENCE, GO TO STEP 2 IF NOT
           DO K = 1,NF
-              IF (ABS(DBETA(K)) .GE. QMARGIN) GOTO 200
+              IF (ABS(DBETA(K)) .GE. DMARGIN) GOTO 200
           ENDDO          
 C         CONVERGED, GO TO STEP 7
           GOTO 700
@@ -297,7 +373,8 @@ C     CHECK IF THIS ALPHA DID THE TRICK
       ENDIF
       
       DO K = 1,NF
-          IF((BETA(K) - ALPHA * DBETA(K)) .LT. 0) THEN
+          IF((K .NE. KZERO) .AND. 
+     &         (BETA(K) - ALPHA * DBETA(K)) .LT. 0) THEN
               KZERO = KZERO + 1
               GOTO 402   
           ENDIF   
@@ -306,6 +383,7 @@ C     CHECK IF THIS ALPHA DID THE TRICK
 C     ALL BETANEW WILL BE NON-NEGATIVE FOR THIS ALPHA
       DO K = 1,NF
           BETANEW(K) = BETA(K) - ALPHA * DBETA(K)
+          IF (K .EQ. KZERO) BETANEW(K) = 0
       ENDDO
       
       END SUBROUTINE
