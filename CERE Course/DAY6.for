@@ -22,16 +22,16 @@ C     P, T    PRESSURE, TEMPERATURE   (I)
       DOUBLE PRECISION TDEW, TBUB, PDEW, PBUB, BETA
             
       BETA = 0
-      CALL GETSATTEMP(NCA, P, Z, BETA, TBUB, X, Y, IER)
-      CALL PRINTRSULT("BUBBLE POINT TEMPERATURE", P, TBUB, IER)
-      CALL GETSATPRES(NCA, T, Z, BETA, PBUB, IER)
-      CALL PRINTRSULT("BUBBLE POINT PRESSURE", PBUB, T, IER)
+C      CALL GETSATTEMP(NCA, P, Z, BETA, TBUB, X, Y, IER)
+C      CALL PRINTRSULT("BUBBLE POINT TEMPERATURE", P, TBUB, IER)
+C      CALL GETSATPRES(NCA, T, Z, BETA, PBUB, IER)
+C      CALL PRINTRSULT("BUBBLE POINT PRESSURE", PBUB, T, IER)
       
       BETA = 1
-      CALL GETSATTEMP(NCA, P, Z, BETA, TDEW, X, Y, IER)
-      CALL PRINTRSULT("DEW POINT TEMPERATURE", P, TDEW, IER)
-      CALL GETSATPRES(NCA, T, Z, BETA, PDEW, IER)
-      CALL PRINTRSULT("DEW POINT PRESSURE", PDEW, T, IER)
+C      CALL GETSATTEMP(NCA, P, Z, BETA, TDEW, X, Y, IER)
+C      CALL PRINTRSULT("DEW POINT TEMPERATURE", P, TDEW, IER)
+C      CALL GETSATPRES(NCA, T, Z, BETA, PDEW, IER)
+C      CALL PRINTRSULT("DEW POINT PRESSURE", PDEW, T, IER)
       
       CALL PHAENV(NCA, Z, IER)
       
@@ -45,20 +45,15 @@ C     VAR   VARIABLE TO GO BY
       DOUBLE PRECISION Z(NCA)
       DOUBLE PRECISION PHAT(NPOINTS), PHAP(NPOINTS)
       
-      INTEGER IPOINT, INDX(NCA + 2), MAXITER
+      INTEGER IPOINT, INDX(NCA + 2), MAXITER, NITER, TNITER
       DOUBLE PRECISION P, T, BETA, SPEC
-      DOUBLE PRECISION KFACT(NCA), ZNORM(NCA)
-      DOUBLE PRECISION L(NCA), V(NCA)
-      DOUBLE PRECISION FUG(NCA), FUGL(NCA), FUGV(NCA)
-      DOUBLE PRECISION FUGT(NCA), FUGTL(NCA), FUGTV(NCA)
-      DOUBLE PRECISION FUGP(NCA), FUGPL(NCA), FUGPV(NCA)
-      DOUBLE PRECISION FUGX(NCA, NCA), FUGXL(NCA, NCA), FUGXV(NCA, NCA)
-      DOUBLE PRECISION JACOB(NCA + 2, NCA + 2), F(NCA + 2)
-      DOUBLE PRECISION DX, X(NCA + 2), X_1(NCA + 2)
+      DOUBLE PRECISION ZNORM(NCA), L(NCA), V(NCA)
+      DOUBLE PRECISION X(NCA + 2), X_1(NCA + 2)
+      DOUBLE PRECISION DXDS(NCA + 2), DXDS_1(NCA + 2), TEMP, DS
       CHARACTER CHOICE
+      LOGICAL RETRO
                  
-C     NUMBER OF ITERATIONS FOR SAT T ALGORITHM
-      MAXITER = 3
+      RETRO = .FALSE.
       IER = 0
       
       SPEC = 0
@@ -69,8 +64,10 @@ C     NORMALIZE THE FEED COMPOSITION
       ENDDO  
       
 C     SMALL INITIAL PRESSURE AND START FROM THE BUBBLE POINT LINE
-      P = 0.3
+      P = 0.5
       BETA = 0
+C     NUMBER OF ITERATIONS FOR SAT T ALGORITHM
+      MAXITER = 3
       CALL GETSATTEMP(NCA, P, ZNORM, BETA, T, L, V, 
      &                IER, MAXITER = MAXITER)
 C     SET X FACTOR
@@ -80,57 +77,124 @@ C     SET X FACTOR
       X(NCA + 1) = LOG(T)
       X(NCA + 2) = LOG(P)
       X_1(:) = 0
-      VAR = 9
+C     SELECT PRESSURE AS FIRST SPECIFICATION
+      VAR = NCA + 2
+      DS = 1
       
+C     MAX NUMBER OF ITERATIONS FOR NEWTON ALGORITHM
+      MAXITER = 50
+      TNITER = 4
       IPOINT = 1
       DO WHILE (.TRUE.)
           
           IF (IPOINT .EQ. 1)  GOTO 100
           
-300       WRITE(*,*)
-          WRITE(*,*) "CONTINUE Y/N"
-          READ (*,*) CHOICE
-          IF(CHOICE .EQ. 'N') GOTO 101
-          WRITE(*,*)
-          WRITE(*,'(A, I4)') 
-     &      "CHOOSE VARIABLE TO GO BY FROM 1 TO ", NCA + 2
-          READ(*,*) VAR
-          WRITE(*,*) "CHOOSE VARIABLE INCREASE"
-          READ(*,*) DX
+C         CALCULATE SENSITIVITIES AND PROCEED CHOOSE THE NEW STEP
+300       CONTINUE
+          IF (RETRO) GOTO 400
+C         GET THE VARIABLE WITH BIGGEST SENSITIVITY
+          TEMP = 0
+          DO I = 1,NCA + 2              
+              IF(ABS(DXDS(I)) .GT. TEMP) THEN
+                  VAR = I
+                  TEMP = ABS(DXDS(I))
+              ENDIF
+          ENDDO
           
-          X(VAR) = X(VAR) + DX
-      
-100       CALL RUNNEWTON(NCA, ZNORM, BETA, VAR, X, IER)
-          IF(IER .GT. 0) THEN
-              WRITE(*,*) "THE CALCULATION DID NOT CONVERGE"
-              X(:) = X_1(:)
-              GOTO 300
+          IF(NITER .GE. TNITER) THEN
+              DS = DS/(1.2*(NITER - TNITER + 1))
+          ELSE 
+              DS = DS *(1.2*(TNITER - NITER))
           ENDIF
           
+C         CHECK IF STEP IS TOO SMALL AND BRAKE
+400       IF (DS .LT. 1E-5) GOTO 500
+          DO I = 1,NCA + 2
+              X(I) = X(I) + DXDS(I)*DS
+          ENDDO
+
+C         RUN THE CALCULATION TO FIND TH POINT
+100       CALL RUNNEWTON(NCA, ZNORM, BETA, VAR, MAXITER,
+     &                    X, DXDS, NITER, IER)
+          IF(IER .GT. 0) THEN
+              WRITE(*,*) "THE CALCULATION DID NOT CONVERGE ", DS
+              X(:) = X_1(:)
+              DXDS(:) = DXDS_1(:)
+              DS = DS/2
+              GOTO 400
+          ENDIF
+          
+C         WE ARE IN THE RETROGRADE AREA, P,T SHOUD DECREASE
+          IF(RETRO) THEN
+              IF (X(NCA + 1) .GE. X_1(NCA + 1) .OR. 
+     &            X(NCA + 2) .GE. X_1(NCA + 2)) THEN 
+                  X(:) = X_1(:)
+                  DXDS(:) = DXDS_1(:)                     
+                  DS = DS/2                  
+                  GOTO 400
+              ENDIF
+          ENDIF          
+     
+C         IF BOTH P AND T ARE DECREASING, WE ARE IN THE RETROGRADE AREA
+          IF (X(NCA + 1) .LT. X_1(NCA + 1) .AND. 
+     &        X(NCA + 2) .LT. X_1(NCA + 2)) THEN
+              IF (RETRO) THEN
+                  GOTO 200
+              ELSE                               
+                  WRITE(*,*) "ENTERED RETROGRADE CALCULATION", VAR
+                  DS = -DS
+                  VAR = NCA + 2
+                  RETRO = .TRUE.
+                  GOTO 200
+              ENDIF              
+          ENDIF
+         
+C         POINT IS ACCEPTED
 200       CONTINUE
           PHAT(IPOINT) = EXP(X(NCA + 1))
           PHAP(IPOINT) = EXP(X(NCA + 2))
           IPOINT = IPOINT + 1
           X_1(:) = X(:)
+          DXDS_1(:) = DXDS(:)
           
 1000      FORMAT(A10, F30.20)
           WRITE(*,*) "STEP SOLUTION"
-          DO I=1,NCA
-              WRITE(*,"(A, I2, F30.20)") "lnK", I, X(I)
-          ENDDO
-          WRITE(*,1000) "lnT", X(NCA + 1)
-          WRITE(*,1000) "lnP", X(NCA + 2)
+C          DO I=1,NCA
+C              WRITE(*,"(A, I2, F30.20)") "lnK", I, X(I)
+C          ENDDO
+C          WRITE(*,1000) "lnT", X(NCA + 1)
+C          WRITE(*,1000) "lnP", X(NCA + 2)
+          WRITE(*,*) "VARIABLE ", VAR, " NUMBER ITERATIONS ", NITER
           WRITE(*,1000) "T", PHAT(IPOINT - 1)
           WRITE(*,1000) "P", PHAP(IPOINT - 1)
+          WRITE(*,*)
+          
+C         IF P OR T ARE BELOW MINIMUM, WE ARE DONE
+          IF (PHAT(IPOINT - 1) .LT. 0.5 .OR. 
+     &        PHAP(IPOINT - 1) .LT. 0.5) THEN
+              WRITE(*,*) "TERMINATED"
+              GOTO 500
+          ENDIF
       ENDDO
+
+500   OPEN(13,FILE='PHAENV.TXT',STATUS='NEW',BLANK='ZERO',ERR=101)
+      GOTO 301
+      OPEN(13,FILE='PHAENV.TXT',STATUS='OLD',BLANK='ZERO',ERR=101)
+301   CONTINUE
+      DO I = 1,NPOINTS
+          IF (PHAT(I) .LE. 0 .OR. PHAP(I) .LE. 0) GOTO 600
+          WRITE(13, "(F30.20, F30.20)") PHAT(I), PHAP(I)
+      ENDDO      
+600   CLOSE(13)
       
 101   CONTINUE
       END SUBROUTINE
       
-      SUBROUTINE RUNNEWTON(NCA, Z, BETA, VAR, X, IER)
+      SUBROUTINE RUNNEWTON(NCA, Z, BETA, VAR, MAXITER,
+     &                    X, DXDS, NITER, IER)
       IMPLICIT DOUBLE PRECISION (A-H, O,Z)
 C     VAR   VARIABLE TO GO BY
-      INTEGER NCA, VAR, IER
+      INTEGER NCA, VAR, IER, MAXITER
       DOUBLE PRECISION Z(NCA)
       
       INTEGER IPOINT, INDX(NCA + 2)
@@ -143,12 +207,14 @@ C     VAR   VARIABLE TO GO BY
       DOUBLE PRECISION FUGX(NCA, NCA), FUGXL(NCA, NCA), FUGXV(NCA, NCA)
       DOUBLE PRECISION JACOB(NCA + 2, NCA + 2), F(NCA + 2)
       DOUBLE PRECISION X(NCA + 2), DX(NCA + 2)
+      DOUBLE PRECISION DXDS(NCA + 2)
       DOUBLE PRECISION MAXERROR
       
       MAXERROR = 1E-6
       
       IER = 0
-                        
+      
+      NITER = 1                        
       DO WHILE (.TRUE.)
 C         GET NEW VAPOR LIQUID COMPOSITION
           DO I = 1,NCA
@@ -165,6 +231,9 @@ C         CHECK FUGACITY CEFFICIENTS
           
 C         CALCULATE JACOBIAN
           DO I = 1,NCA+2
+C             SET dF/dS
+              DXDS(I) = 0
+                            
 C             CALCULATE FUNCTION F
               IF(I .LE. NCA) THEN
                   F(I) = X(I) + FUGV(I) - FUGL(I)
@@ -206,10 +275,14 @@ C                 SPEC DERIVATIVE
                   ENDIF                  
               ENDDO
           ENDDO
+
+C         LAST VALUE OF dF/dS EQUALS 1
+          DXDS(NCA + 2) = 1
           
 C         INVERT JACOBIAN AND GET DELTA X
           CALL LUDEC(NCA + 2, INDX, JACOB)
           CALL BACKSUBST(NCA + 2, INDX, JACOB, F)
+          CALL BACKSUBST(NCA + 2, INDX, JACOB, DXDS)
           
 C         DELTA X COMES IN THE VALUES OF F
 C         CALCULATE NEW X
@@ -235,6 +308,11 @@ C         CHECK IF CONVERGED
           GOTO 200
           
 100       CONTINUE
+          IF (NITER .GE. MAXITER) THEN
+              IER = 701
+              GOTO 101
+          ENDIF
+          NITER = NITER + 1
       ENDDO
       
 200   CONTINUE
@@ -264,7 +342,7 @@ C     P                    PRESSURE   (I)
       IER = 0
       MAXERROR = 1E-5
       
-      CHECKCOMP = 6
+      CHECKCOMP = 1
       
       DO I=1,NCA
           ZNORM(I) = Z(I) / SUM(Z)
@@ -384,7 +462,7 @@ C     P                    PRESSURE   (I)
       IER = 0
       MAXERROR = 1E-5
       
-      CHECKCOMP = 6
+      CHECKCOMP = 1
       
       DO I=1,NCA
           ZNORM(I) = Z(I) / SUM(Z)
