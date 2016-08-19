@@ -40,39 +40,20 @@ C     LIST    LIST OF COMPONENT INDEXES
       
       DOUBLE PRECISION BETA(NF), BETA0(NF), BETANEW(NF)
       DOUBLE PRECISION FUGFAC(NCA, NF), Y(NCA, NF), FUG(NCA)
-      DOUBLE PRECISION KFACT(NCA), FUGFACNEW(NCA, NF), EFUG(NF), EMARGIN
+      DOUBLE PRECISION FUGFACNEW(NCA, NF), EFUG(NF), EMARGIN
       DOUBLE PRECISION FUGFAC_1(NCA, NF), FUGFAC_2(NCA, NF)
-      DOUBLE PRECISION LAMBDA, L1, L2, D(NCA), D1(NCA)
-      DOUBLE PRECISION DMARGIN, G1, G2, DG
+      DOUBLE PRECISION DMARGIN
       INTEGER ITER, CHECKSTEP
       
       EMARGIN = 1E-7
       DMARGIN = 1E-7
       CHECKSTEP = 5
-      
-C     INITIAL ESTIMATES
-      CALL WILSON_KFACT(NCA, P, T, KFACT)
       DO K = 1,NF
           EFUG(K) = 1
-          DO I = 1,NCA
-              IF(K .EQ. 1) THEN
-                  FUGFAC(I, K) = 1
-              ELSE
-                  FUGFAC(I, K) = KFACT(I)
-C                 H2S IN METHANE RICH LIQUID PHASE
-                  IF(K .EQ. 2 .AND. LIST(I) .EQ. 15) THEN
-                      FUGFAC(I, K) = EXP(LOG(KFACT(I)) + 1)
-                  END IF
-          
-C                 METHANE IN H2S RICH LIQUID PHASE
-                  IF(K .EQ.3 .AND. LIST(I) .EQ. 1) THEN
-                      FUGFAC(I, K) = EXP(LOG(KFACT(I)) + 1)
-                  END IF      
-              ENDIF
-          ENDDO
-          
-          BETA(K) = 1.0/NF
-      ENDDO
+      ENDDO      
+      
+C     INITIAL ESTIMATES
+      CALL MULTIWILSON(NCA, NF, T, P, Z, LIST, FUGFAC, BETA)
       
       NITER = 1      
       DO WHILE (.TRUE.)
@@ -113,59 +94,11 @@ C         PREPARE THE NEXT STEP
 100       FUGFAC_2(:,:) = FUGFAC_1(:,:)
           FUGFAC_1(:,:) = FUGFAC(:,:)
           FUGFAC(:,:) = FUGFACNEW(:,:)
+          
 C         ACCELARATE THE CALCULATION
           IF (MOD(NITER, CHECKSTEP) .EQ. 0) THEN
-              DO K = 1,NF
-                  L1 = 0
-                  L2 = 0
-                  DO I = 1,NCA
-                      D(I) = LOG(FUGFAC_1(I, K)) - LOG(FUGFAC_2(I, K))
-                      D1(I) = LOG(FUGFAC(I, K)) - LOG(FUGFAC_1(I, K))
-                      
-                      L1 = L1 + D1(I)**2
-                      L2 = L2 + D(I) * D1(I)
-                  ENDDO
-                  LAMBDA = L1 / L2
-                  
-C                 USE THERMCALC CORRECTED K FACTORS              
-                  DO I = 1,NCA
-                      FUGFACNEW(I, K) = EXP (LOG(FUGFAC(I, K)) + 
-     &                           (D1(I) * LAMBDA) / (1 - LAMBDA))
-                  ENDDO
-              ENDDO
-C             CHECK NEW FUGACITY FACTORS IF THEY DECREASE THE GIBBS ENERGY
-C             GIBBS ENERGY BEFORE ACCELARATION
-              G1 = 0
-              DO I = 1,NCA
-                  DO K = 1,NF
-                      G1 = G1 + Y(I, K) * 
-     &                    (LOG(Y(I, K)) + LOG(FUGFAC(I, K)))
-                  ENDDO
-              ENDDO
-              
-C             GIBBS ENERGY AFTER ACCELARATION
-              BETANEW(:) = BETA(:)
-              CALL MULTRACF(NCA, NF, Z, BETANEW, FUGFACNEW,
-     &                        DMARGIN, Y, IER)
-              G2 = 0
-              DO K = 1,NF
-                  CALL THERMO(T, P, Y(:,K), FUG)
-                  DO I = 1,NCA
-                      G2 = G2 + Y(I, K) * 
-     &                    (LOG(Y(I, K)) + FUG(I))
-                  ENDDO
-                  
-                  FUGFACNEW(:,K) = EXP(FUG(:))
-              ENDDO
-              
-C             CALCULATE THE DELTA GIBBS
-              DG = G2 - G1
-C             IF DELTA GIBBS IS NEGATIVE, WE ACCEPT ACCELARATION
-              IF (DG .LT. 0) THEN
-                  FUGFAC(:,:) = FUGFACNEW(:,:)
-              ELSE
-                  DG = 0
-              ENDIF              
+              CALL FUGACC(NCA, NF, T, P, Z, Y, DMARGIN,
+     &                    FUGFAC, FUGFAC_1, FUGFAC_2, FUGFACNEW, BETA)
           ENDIF
                     
           NITER = NITER + 1
@@ -385,6 +318,107 @@ C     ALL BETANEW WILL BE NON-NEGATIVE FOR THIS ALPHA
           BETANEW(K) = BETA(K) - ALPHA * DBETA(K)
           IF (K .EQ. KZERO) BETANEW(K) = 0
       ENDDO
+      
+      END SUBROUTINE
+      
+      SUBROUTINE MULTIWILSON(NCA, NF, T, P, Z, LIST, FUGFAC, BETA)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      
+      INTEGER NCA, NF, LIST(NCA)
+      DOUBLE PRECISION T,P
+      DOUBLE PRECISION Z(NCA)
+      DOUBLE PRECISION BETA(NF), KFACT(NCA)
+      DOUBLE PRECISION FUGFAC(NCA, NF)
+      
+      
+      CALL WILSON_KFACT(NCA, P, T, KFACT)
+      DO K = 1,NF
+          DO I = 1,NCA
+              IF(K .EQ. 1) THEN
+                  FUGFAC(I, K) = 1
+              ELSE
+                  FUGFAC(I, K) = KFACT(I)
+C                 H2S IN METHANE RICH LIQUID PHASE
+                  IF(K .EQ. 2 .AND. LIST(I) .EQ. 15) THEN
+                      FUGFAC(I, K) = EXP(LOG(KFACT(I)) + 1)
+                  END IF
+          
+C                 METHANE IN H2S RICH LIQUID PHASE
+                  IF(K .EQ.3 .AND. LIST(I) .EQ. 1) THEN
+                      FUGFAC(I, K) = EXP(LOG(KFACT(I)) + 1)
+                  END IF      
+              ENDIF
+          ENDDO
+          
+          BETA(K) = 1.0/NF
+      ENDDO
+      END SUBROUTINE
+      
+      SUBROUTINE FUGACC(NCA, NF, T, P, Z, Y, DMARGIN,
+     &     FUGFAC, FUGFAC_1, FUGFAC_2, FUGFACNEW, BETA)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      
+      INTEGER NCA, NF, LIST(NCA), IER
+      DOUBLE PRECISION T,P
+      DOUBLE PRECISION Z(NCA)
+      DOUBLE PRECISION BETA(NF), BETANEW(NF)
+      DOUBLE PRECISION FUGFAC(NCA, NF), Y(NCA, NF), FUG(NCA)
+      DOUBLE PRECISION FUGFAC_1(NCA, NF), FUGFAC_2(NCA, NF)
+      DOUBLE PRECISION FUGFACNEW(NCA, NF)
+      DOUBLE PRECISION LAMBDA, L1, L2, D(NCA), D1(NCA)
+      DOUBLE PRECISION DMARGIN, G1, G2, DG
+      
+C     CHECK NEW FUGACITY FACTORS IF THEY DECREASE THE GIBBS ENERGY
+C     GIBBS ENERGY BEFORE ACCELARATION
+      G1 = 0
+      DO I = 1,NCA
+	    DO K = 1,NF
+	        G1 = G1 + Y(I, K) * 
+     &                    (LOG(Y(I, K)) + LOG(FUGFAC(I, K)))
+	    ENDDO
+      ENDDO
+      
+C     ACCELARATION      
+      DO K = 1,NF
+	    L1 = 0
+	    L2 = 0
+	    DO I = 1,NCA
+	        D(I) = LOG(FUGFAC_1(I, K)) - LOG(FUGFAC_2(I, K))
+	        D1(I) = LOG(FUGFAC(I, K)) - LOG(FUGFAC_1(I, K))
+	  
+	        L1 = L1 + D1(I)**2
+	        L2 = L2 + D(I) * D1(I)
+	    ENDDO
+	    LAMBDA = L1 / L2
+
+C         USE THERMCALC CORRECTED K FACTORS              
+	    DO I = 1,NCA
+	      FUGFACNEW(I, K) = EXP (LOG(FUGFAC(I, K)) + 
+     &                           (D1(I) * LAMBDA) / (1 - LAMBDA))
+	    ENDDO
+      ENDDO
+
+C     GIBBS ENERGY AFTER ACCELARATION
+      BETANEW(:) = BETA(:)
+      CALL MULTRACF(NCA, NF, Z, BETANEW, FUGFACNEW,
+     &                        DMARGIN, Y, IER)
+      G2 = 0
+      DO K = 1,NF
+	    CALL THERMO(T, P, Y(:,K), FUG)
+          DO I = 1,NCA
+                G2 = G2 + Y(I, K) * 
+     &                    (LOG(Y(I, K)) + FUG(I))
+          ENDDO
+
+          FUGFACNEW(:,K) = EXP(FUG(:))
+      ENDDO
+
+C     CALCULATE THE DELTA GIBBS
+      DG = G2 - G1
+C     IF DELTA GIBBS IS NEGATIVE, WE ACCEPT ACCELARATION
+      IF (DG .LT. 0) THEN
+          FUGFAC(:,:) = FUGFACNEW(:,:)
+      ENDIF
       
       END SUBROUTINE
       
